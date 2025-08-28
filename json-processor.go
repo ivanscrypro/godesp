@@ -2,8 +2,12 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
+	"runtime"
 	"strconv"
+	"strings"
+	"unicode/utf8"
 )
 
 type Payloads struct {
@@ -36,8 +40,52 @@ type Methods struct {
 	} `json:"PATCH"`
 }
 
+// Validate a *single* file name (no separators) you might store/display.
+// Use in addition to SafeJoin if you accept bare names from users.
+func ValidateFileName(name string) error {
+	var (
+		ErrBadName = errors.New("invalid file name")
+		ErrNotUTF8 = errors.New("name not valid UTF-8")
+	)
+	if name == "" {
+		return ErrBadName
+	}
+	if !utf8.ValidString(name) {
+		return ErrNotUTF8
+	}
+	// Forbid path separators and control chars.
+	if strings.ContainsRune(name, '/') || strings.ContainsRune(name, '\\') {
+		return ErrBadName
+	}
+	for _, r := range name {
+		if r < 0x20 { // control chars
+			return ErrBadName
+		}
+	}
+	// Forbid device names on Windows (NUL, CON, PRN, AUX, COM1, LPT1, etc.)
+	if runtime.GOOS == "windows" {
+		l := strings.ToLower(name)
+		bad := []string{"con", "prn", "aux", "nul",
+			"com1", "com2", "com3", "com4", "com5", "com6", "com7", "com8", "com9",
+			"lpt1", "lpt2", "lpt3", "lpt4", "lpt5", "lpt6", "lpt7", "lpt8", "lpt9"}
+		for _, b := range bad {
+			if l == b || strings.HasPrefix(l, b+".") {
+				return ErrBadName
+			}
+		}
+	}
+	return nil
+}
+
 func openFile(filepath string) []byte {
 	var m LogMessage
+	err := ValidateFileName(filepath)
+	if err != nil {
+		m.MessageType = "fatal"
+		m.Message = "The filename " + filepath + " is invalid or contains invalid characters"
+		m.getLogger()
+		return nil
+	}
 	// reading the device-keywords.json file
 	content, err := os.ReadFile(filepath)
 	if err != nil {
